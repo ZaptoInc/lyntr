@@ -2,15 +2,19 @@
 	import * as Tooltip from '@/components/ui/tooltip';
 	import { Label } from '@/components/ui/label';
 	import * as HoverCard from '@/components/ui/hover-card/index.js';
+	import * as AlertDialog from '@/components/ui/alert-dialog';
 	import Avatar from './Avatar.svelte';
 	import { mode } from 'mode-watcher';
 	import { cdnUrl } from './stores';
 
 	import CalendarDays from 'lucide-svelte/icons/calendar-days';
 	import * as Popover from '@/components/ui/popover';
-	import { Ellipsis, Trash } from 'lucide-svelte';
+	import { Ellipsis, Trash, Copy } from 'lucide-svelte';
 	import { toast } from 'svelte-sonner';
 	import Report from './Report.svelte';
+	import DOMPurify from 'dompurify';
+	import { page } from '$app/stores';
+	import { Button } from '@/components/ui/button';
 
 	function getTimeElapsed(date: Date | string) {
 		if (typeof date === 'string') date = new Date(date);
@@ -32,27 +36,27 @@
 		return `${seconds}s`;
 	}
 	function formatDate(date) {
-    	if (typeof date === 'string') date = new Date(date);
+		if (typeof date === 'string') date = new Date(date);
 
-    	const options = {
-        	year: 'numeric',
-        	month: 'long'
-    	};
-    	return date.toLocaleDateString(undefined, options);
+		const options = {
+			year: 'numeric',
+			month: 'long'
+		};
+		return date.toLocaleDateString(undefined, options);
 	}
 
 	function formatDateTooltip(date) {
-    	date = new Date(date);
-    	
+		date = new Date(date);
+
 		const options = {
-        	hour: '2-digit',
-        	minute: '2-digit',
-        	month: 'short',
-        	day: 'numeric',
-        	year: 'numeric'
+			hour: '2-digit',
+			minute: '2-digit',
+			month: 'short',
+			day: 'numeric',
+			year: 'numeric'
 		};
-		
-    	return date.toLocaleString(undefined, options);
+
+		return date.toLocaleString(undefined, options);
 	}
 
 	let popoverOpened = false;
@@ -63,7 +67,7 @@
 	export let verified;
 	export let handle: string;
 	export let createdAt;
-	export let content;
+	export let content: string | null;
 	export let iq;
 	export let bio: string | null;
 	export let smaller = false;
@@ -72,6 +76,10 @@
 	export let isAuthor: boolean;
 	export let has_image: boolean | null;
 	export let postId: string;
+	let contentElement: HTMLSpanElement | null = null;
+	content = content!;
+	let clickingExternalLink = false;
+	let externalLink: URL | null = null;
 
 	const formattedDate = formatDateTooltip(createdAt);
 
@@ -85,6 +93,11 @@
 		} else {
 			toast(`Unknown error occured while deleting: ${response.status} | ${response.statusText}`);
 		}
+	}
+
+	function handleCopy() {
+		toast('Link copied to clipboard!');
+		navigator.clipboard.writeText(content)
 	}
 
 	function truncateContentFunc(
@@ -103,6 +116,67 @@
 	}
 
 	$: ({ truncated, needsReadMore } = truncateContentFunc(content));
+
+	$: if (contentElement) {
+		const sanitizedContent = DOMPurify.sanitize(contentElement.innerHTML, {
+			USE_PROFILES: { html: true },
+			ALLOWED_TAGS: ['a'],
+			ALLOWED_ATTR: ['href', 'target']
+		});
+
+		const tempDiv = document.createElement('div');
+		tempDiv.innerHTML = sanitizedContent;
+
+		const linkRegex = /([A-Za-z]+:\/\/[^\s]+)/g;
+
+		tempDiv.childNodes.forEach((node: Node) => {
+			if (node.nodeType === Node.TEXT_NODE && node.textContent) {
+				const fragment = document.createDocumentFragment();
+				let lastIndex = 0;
+				let match: RegExpExecArray | null;
+
+				while ((match = linkRegex.exec(node.textContent)) !== null) {
+					const link = match[0];
+					const precedingText = node.textContent.slice(lastIndex, match.index);
+
+					if (precedingText) {
+						fragment.appendChild(document.createTextNode(precedingText));
+					}
+
+					const anchor = document.createElement('a');
+					anchor.href = link;
+					anchor.textContent = link;
+					anchor.target = '_blank';
+					anchor.rel = 'noopener noreferrer';
+
+					anchor.addEventListener('click', (e: MouseEvent) => {
+						const url = new URL(anchor.href);
+						if (url.host !== window.location.host) {
+							e.preventDefault();
+							handleExternalLink(anchor.href);
+						}
+					});
+
+					fragment.appendChild(anchor);
+					lastIndex = linkRegex.lastIndex;
+				}
+
+				if (lastIndex < node.textContent.length) {
+					fragment.appendChild(document.createTextNode(node.textContent.slice(lastIndex)));
+				}
+
+				node.parentNode?.replaceChild(fragment, node);
+			}
+		});
+
+		contentElement.innerHTML = '';
+		contentElement.appendChild(tempDiv);
+	}
+
+	function handleExternalLink(url: string) {
+		externalLink = new URL(url);
+		clickingExternalLink = true;
+	}
 </script>
 
 <div class={`${$$props.class} flex items-start gap-2`}>
@@ -110,6 +184,43 @@
 		<a href="/@{handle}" class="inline-block max-h-[40px] min-w-[40px]">
 			<Avatar size={10} src={cdnUrl(userId, 'small')} alt="A profile picture." />
 		</a>
+	{/if}
+
+	{#if clickingExternalLink}
+		<AlertDialog.Root bind:open={clickingExternalLink}>
+			<AlertDialog.Content>
+				<AlertDialog.Header>
+					<AlertDialog.Title class="mb-2 select-none text-2xl font-bold">
+						Leaving Lyntr
+					</AlertDialog.Title>
+					<AlertDialog.Description class="flex select-none flex-col gap-2">
+						<span>This link leads to an external website.</span>
+						<span class="rounded-md border-[1px] border-solid border-primary p-2 break-all">
+							{externalLink}
+						</span>
+					</AlertDialog.Description>
+				</AlertDialog.Header>
+				<AlertDialog.Footer>
+					<Button
+						variant="outline"
+						on:click={() => {
+							clickingExternalLink = false;
+						}}
+					>
+						Return to Lyntr
+					</Button>
+					<Button
+						on:click={() => {
+							if (!externalLink) return console.error('externalLink is null');
+							window.open(externalLink);
+							externalLink = null;
+						}}
+					>
+						Open
+					</Button>
+				</AlertDialog.Footer>
+			</AlertDialog.Content>
+		</AlertDialog.Root>
 	{/if}
 
 	<div class="flex w-full flex-col text-left">
@@ -210,6 +321,13 @@
 						</button>
 					</Popover.Trigger>
 					<Popover.Content class="flex w-auto flex-col rounded-lg p-2 shadow-lg">
+						<button
+							on:click={handleCopy}
+							class="flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-lynt-foreground"
+						>
+							<Copy class="h-5 w-5 text-muted-foreground" />
+							<span>Copy</span>
+						</button>
 						{#if isAuthor}
 							<button
 								on:click={handleDelete}
@@ -219,15 +337,16 @@
 								<span>Delete</span>
 							</button>
 						{:else}
-							<Report profile={true} {userId} lyntId={postId} />
-							<Report profile={false} {userId} lyntId={postId} />
+							<Report {userId} lyntId={postId} />
 						{/if}
 					</Popover.Content>
 				</Popover.Root>
 			</div>
 		</div>
 
-		<span class="max-w-[490px] whitespace-pre-wrap break-words text-lg">{truncated}</span>
+		<span bind:this={contentElement} class="max-w-[490px] whitespace-pre-wrap break-words text-lg"
+			>{truncated}</span
+		>
 
 		{#if needsReadMore}
 			<span class="mt-2 text-sm text-muted-foreground hover:underline">Click to Read more...</span>
@@ -235,5 +354,5 @@
 	</div>
 </div>
 {#if has_image}
-		<img class="avatar max-h-[600px] mt-2 object-contain" src={cdnUrl(postId)} alt="ok" />
+	<img class="avatar mt-2 max-h-[600px] object-contain" src={cdnUrl(postId)} alt="ok" />
 {/if}
